@@ -1,0 +1,116 @@
+hello        }
+    </style>
+</head>
+<body>
+    <div id="videoContainer">
+        <video id="video" autoplay playsinline></video>
+    </div>
+    <canvas id="canvas"></canvas>
+    <div id="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="clearBtn">Clear</button>
+    </div>
+    <script>
+        // Request access to the device's camera. We use the rear camera if available.
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' } }, audio: false });
+                document.getElementById('video').srcObject = stream;
+            } catch (err) {
+                // Fallback to any camera if rear camera is unavailable
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                    document.getElementById('video').srcObject = stream;
+                } catch (error) {
+                    console.error('Camera access denied:', error);
+                }
+            }
+        }
+
+        // Initialize camera on load
+        startCamera();
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let isRecording = false;  // Controlled by Start/Stop buttons
+        let isDrawing = false;    // Internal state: are we currently drawing?
+        let lastX = 0;
+        let lastY = 0;
+
+        // Resize canvas to fill the viewport
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        startBtn.addEventListener('click', () => {
+            isRecording = true;
+            isDrawing = false;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        });
+
+        stopBtn.addEventListener('click', () => {
+            isRecording = false;
+            isDrawing = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
+
+        clearBtn.addEventListener('click', () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        });
+
+        // DeviceOrientation handler
+        window.addEventListener('deviceorientation', (event) => {
+            if (!isRecording) {
+                // If recording is off we ignore movement completely
+                return;
+            }
+            const beta = event.beta;   // front/back tilt, range roughly [-180, 180]
+            const gamma = event.gamma; // left/right tilt, range roughly [-90, 90]
+
+            // Only record strokes if the device is sufficiently tilted downward
+            // Beta > threshold implies the phone is leaned forward like a pen
+            const threshold = 40;
+            if (beta > threshold && Math.abs(gamma) < 60) {
+                // If we are starting a new stroke, anchor at the current midpoint
+                if (!isDrawing) {
+                    isDrawing = true;
+                    lastX = canvas.width / 2;
+                    lastY = canvas.height / 2;
+                    return;
+                }
+                // Map orientation changes to screen movement
+                const sensitivity = 2.5;
+                const deltaX = gamma * sensitivity;
+                const deltaY = (beta - threshold) * sensitivity;
+
+                const newX = lastX + deltaX;
+                const newY = lastY + deltaY;
+
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(newX, newY);
+                ctx.stroke();
+
+                lastX = newX;
+                lastY = newY;
+            } else {
+                // Stop drawing when the phone is lifted or the tilt no longer satisfies the threshold
+                isDrawing = false;
+            }
+        });
+    </script>
+</body>
+</html>
