@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accelerometer Drawing Demo</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #000;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 90vh;
+            z-index: 1;
+        }
+        #controls {
+            position: fixed;
+            bottom: 10px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #444;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        // Resize the canvas to fill the viewport
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight * 0.9;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Recording state
+        let isRecording = false;
+        let velX = 0;
+        let velY = 0;
+        let posX = 0;
+        let posY = 0;
+        let lastTime = null;
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        startBtn.addEventListener('click', () => {
+            isRecording = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            velX = 0;
+            velY = 0;
+            posX = 0;
+            posY = 0;
+            lastTime = Date.now();
+            // Begin a new path starting from the center
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, canvas.height / 2);
+        });
+
+        stopBtn.addEventListener('click', () => {
+            isRecording = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
+
+        window.addEventListener('devicemotion', (event) => {
+            if (!isRecording) return;
+            const currentTime = Date.now();
+            if (lastTime === null) {
+                lastTime = currentTime;
+                return;
+            }
+            const dt = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+            const accel = event.acceleration || event.accelerationIncludingGravity;
+            if (!accel) return;
+            const ax = accel.x || 0;
+            const ay = accel.y || 0;
+            // Integrate acceleration to velocity and position
+            velX += ax * dt;
+            velY += ay * dt;
+            posX += velX * dt;
+            posY += velY * dt;
+            // Apply damping to reduce drift
+            const damping = 0.98;
+            velX *= damping;
+            velY *= damping;
+            // Convert meters to pixels with a scale factor
+            const scale = 50;
+            const drawX = canvas.width / 2 + posX * scale;
+            const drawY = canvas.height / 2 + posY * scale;
+            ctx.lineTo(drawX, drawY);
+            ctx.stroke();
+        });
+    </script>
+</body>
+</html>
