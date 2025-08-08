@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tilt‑Pen AR Webapp</title>
     <style>
+        /* Basic reset to remove scrollbars and margins */
         html, body {
             margin: 0;
             padding: 0;
@@ -12,6 +13,8 @@
             background: #000;
             font-family: Arial, Helvetica, sans-serif;
         }
+
+        /* Container that holds the live camera feed */
         #videoContainer {
             position: absolute;
             top: 0;
@@ -21,11 +24,15 @@
             z-index: 1;
             background: #000;
         }
+
+        /* The video element showing the rear camera feed */
         #video {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
+
+        /* Canvas for drawing strokes on top of the video */
         #canvas {
             position: absolute;
             top: 0;
@@ -33,8 +40,10 @@
             width: 100vw;
             height: 100vh;
             z-index: 2;
-            pointer-events: none;
+            pointer-events: none; /* allow touches to fall through to video */
         }
+
+        /* Simple toolbar with controls */
         #controls {
             position: fixed;
             bottom: 16px;
@@ -45,6 +54,7 @@
             justify-content: center;
             gap: 12px;
         }
+
         button {
             padding: 10px 20px;
             font-size: 16px;
@@ -54,6 +64,7 @@
             color: #fff;
             cursor: pointer;
         }
+
         button:disabled {
             background-color: #444;
             cursor: default;
@@ -71,11 +82,13 @@
         <button id="clearBtn">Clear</button>
     </div>
     <script>
+        // Request access to the device's camera. We use the rear camera if available.
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' } }, audio: false });
                 document.getElementById('video').srcObject = stream;
             } catch (err) {
+                // Fallback to any camera if rear camera is unavailable
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                     document.getElementById('video').srcObject = stream;
@@ -84,68 +97,154 @@
                 }
             }
         }
+
+        // Initialize camera on load
         startCamera();
+
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        let isRecording = false;
-        let isDrawing = false;
+        let isRecording = false;  // Controlled by Start/Stop buttons
+        let isDrawing = false;    // Internal state: are we currently drawing?
         let lastX = 0;
         let lastY = 0;
+
+        // Variables for motion‑based displacement. When the phone is used like a
+        // pen, we integrate accelerometer data over time to estimate how far
+        // the device has moved across the table. Note: this is highly
+        // approximate and subject to drift, but demonstrates how one might map
+        // physical movement to drawing on the canvas.
+        let isPenDown = false;    // True when device is tilted forward like a pen
+        let velX = 0;
+        let velY = 0;
+        let posX = 0;
+        let posY = 0;
+        let lastMotionTime = null;
+
+        // Resize canvas to fill the viewport
         function resizeCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
         }
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
+
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const clearBtn = document.getElementById('clearBtn');
+
         startBtn.addEventListener('click', () => {
             isRecording = true;
             isDrawing = false;
+            // Reset motion state on each new recording
+            velX = 0;
+            velY = 0;
+            posX = 0;
+            posY = 0;
+            lastMotionTime = null;
             startBtn.disabled = true;
             stopBtn.disabled = false;
         });
+
         stopBtn.addEventListener('click', () => {
             isRecording = false;
             isDrawing = false;
+            isPenDown = false;
+            velX = 0;
+            velY = 0;
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
+
         clearBtn.addEventListener('click', () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         });
+
+        // DeviceOrientation handler
         window.addEventListener('deviceorientation', (event) => {
             if (!isRecording) {
+                // If recording is off we ignore movement completely
                 return;
             }
-            const beta = event.beta;
-            const gamma = event.gamma;
+            const beta = event.beta;   // front/back tilt, range roughly [-180, 180]
+            const gamma = event.gamma; // left/right tilt, range roughly [-90, 90]
+
+            // Only record strokes if the device is sufficiently tilted downward
+            // Beta > threshold implies the phone is leaned forward like a pen
             const threshold = 40;
+            // When the device is tilted forward beyond the threshold and not
+            // rolled too far sideways, treat this as “pen down”.
             if (beta > threshold && Math.abs(gamma) < 60) {
+                isPenDown = true;
+                // If we are starting a new stroke from orientation alone,
+                // initialize last positions to the center of the canvas. This
+                // ensures that the first orientation‑based movement starts
+                // from a known point.
                 if (!isDrawing) {
                     isDrawing = true;
                     lastX = canvas.width / 2;
                     lastY = canvas.height / 2;
-                    return;
                 }
-                const sensitivity = 2.5;
-                const deltaX = gamma * sensitivity;
-                const deltaY = (beta - threshold) * sensitivity;
-                const newX = lastX + deltaX;
-                const newY = lastY + deltaY;
-                ctx.strokeStyle = '#00ff00';
-                ctx.lineWidth = 3;
-                ctx.lineCap = 'round';
-                ctx.beginPath();
-                ctx.moveTo(lastX, lastY);
-                ctx.lineTo(newX, newY);
-                ctx.stroke();
-                lastX = newX;
-                lastY = newY;
             } else {
+                // When pen is lifted, stop drawing and reset pen state
+                isPenDown = false;
                 isDrawing = false;
             }
+        });
+
+        // DeviceMotion handler for integration of accelerometer data. When the
+        // phone is tilted like a pen (isPenDown == true) and recording is on,
+        // we accumulate acceleration to approximate translation. The resulting
+        // displacements are scaled and added to the canvas coordinates.
+        window.addEventListener('devicemotion', (event) => {
+            if (!isRecording || !isPenDown) {
+                // Only integrate motion when recording and pen down
+                return;
+            }
+            // Determine the current timestamp for integration
+            const currentTime = Date.now();
+            if (lastMotionTime === null) {
+                lastMotionTime = currentTime;
+                return;
+            }
+            const dt = (currentTime - lastMotionTime) / 1000; // convert ms to s
+            lastMotionTime = currentTime;
+
+            // Use acceleration without gravity if available, otherwise fall back
+            const accel = event.acceleration || event.accelerationIncludingGravity;
+            if (!accel) {
+                return;
+            }
+            let ax = accel.x || 0;
+            let ay = accel.y || 0;
+
+            // Integrate acceleration to velocity and position
+            velX += ax * dt;
+            velY += ay * dt;
+            posX += velX * dt;
+            posY += velY * dt;
+
+            // Apply a simple damping factor to reduce drift over time
+            const damping = 0.98;
+            velX *= damping;
+            velY *= damping;
+
+            // Scale motion to screen coordinates. These scale factors are
+            // empirical and can be adjusted for sensitivity.
+            const motionScale = 50; // pixels per meter approximately
+            const newX = lastX + (posX * motionScale);
+            const newY = lastY + (posY * motionScale);
+
+            // Draw line from last orientation position to new integrated position
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(newX, newY);
+            ctx.stroke();
+
+            lastX = newX;
+            lastY = newY;
         });
     </script>
 </body>
